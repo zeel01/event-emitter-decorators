@@ -1,4 +1,4 @@
-import { emitter, emit, on, emits, EventEmitter } from "./src/EventEmitter.js";
+import { emitter, emit, on, emits, EventEmitter } from "./src/decorators.js";
 
 export default emitter;
 

@@ -5,8 +5,24 @@
   "description": "Stage 3 JavaScript decorators for creating and interacting with EventEmitters.",
   "main": "index.js",
   "scripts": {
+    "clean": "rimraf dist",
     "watch": "babel --watch src --out-dir dist --source-maps",
-    "build": "babel src --out-dir dist --source-maps"
+    "build": "babel src --out-dir dist --source-maps",
+    "test:run": "node --test --enable-source-maps dist/test.js",
+    "test:coverage": "node --test --enable-source-maps --experimental-test-coverage --test-reporter=lcov --test-reporter-destination=dist/lcov.info dist/test.js",
+    "test": "npm run build & npm run test:run & npm run test:coverage",
+    "test:watch": "concurrently \"npm:watch\" \"nodemon dist/test.js\" --kill-others --timings --default-input-target 1 --names \"Build,Tests\" --prefix-colors \"yellow.bold,green.bold,auto\""
+  },
+  "nodemonConfig": {
+    "ignore": [
+      ".git",
+      "node_modules"
+    ],
+    "watch": [
+      "dist",
+      "package.json"
+    ],
+    "ext": "js,json"
   },
   "author": "Josh Olsen",
   "license": "MIT",

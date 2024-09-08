@@ -1,6 +1,5 @@
 import BaseEventEmitter from "events";
 
-
 class EventEmitter {
 	static symbol = Symbol("EventEmitter");
 
@@ -34,24 +33,22 @@ class EventEmitter {
 	}
 
 	static assertIsEmitter(object, name = object?.name || object?.constructor?.name || "object") {
-		if (!object) throw new Error(`Object '${name}' is not defined.`);
-		if (object instanceof EventEmitter) return true;
-		if (object.emit) return true;
-
-		throw new Error(`Object '${name}' is not an EventEmitter.`, { cause: object });
+		this.assertCanEmit(object, name);
+		this.assertCanRegister(object, name);
 	}
 
 	static _attachListenerTo(emitter, event, listener, once = false) {
 		if (!emitter) throw new Error("Emitter is not defined.");
 		if (once) {
-			if      (emitter.once) emitter.once(event, listener);
-			else if (emitter.addEventListener) emitter.addEventListener(event, listener, { once: true });
+			if (emitter.once) return emitter.once(event, listener);
+			if (emitter.addEventListener) return emitter.addEventListener(event, listener, { once: true });
 		}
 		else {
-			if (emitter.on) emitter.on(event, listener);
-			if (emitter.addListener) emitter.addListener(event, listener);
-			if (emitter.addEventListener) emitter.addEventListener(event, listener);
+			if (emitter.on) return emitter.on(event, listener);
+			if (emitter.addListener) return emitter.addListener(event, listener);
+			if (emitter.addEventListener) return emitter.addEventListener(event, listener);
 		}
+		throw new Error("Emitter does not have a listener registration method.");
 	}
 
 	static _registerPendingListener(emitter, target, event, listener, once = false) {
@@ -86,7 +83,7 @@ class EventEmitter {
 }
 
 Object.assign(EventEmitter.prototype, BaseEventEmitter.prototype);
-
+Object.defineProperty(EventEmitter.prototype, EventEmitter.symbol, { value: true, enumerable: false, writable: false });
 
 /**
  * @template target
@@ -121,12 +118,13 @@ export default function emitter(target, { kind, name, addInitializer, metadata }
 	if (Class instanceof EventEmitter) return Class;
 
 	const descriptors = Object.getOwnPropertyDescriptors(EventEmitter.prototype);
-
 	for (const key of Reflect.ownKeys(EventEmitter.prototype)) {
 		const descriptor = descriptors[key];
 		if (!descriptor?.enumerable || key in Class.prototype) continue;
 		Object.defineProperty(Class.prototype, key, descriptor);
 	}
+
+	Object.defineProperty(Class.prototype, EventEmitter.symbol, { value: true, enumerable: false, writable: false });
 
 	return Class;
 }
@@ -149,8 +147,14 @@ EventEmitter.emitter = emitter;
  * @param {boolean} once - If `true`, the listener will only be called once.
  * @returns {(method: (...args[]: any) => any, context: Object) => (...args[]: any) => any} A decorator function that registers the method as an event listener.
  */
-export function on(event, once = false) {
-	return function (method, { kind, name, addInitializer }) {
+export function on(...args) {
+	let event;
+	let once = false;
+
+	if (typeof args[0] === "string" || typeof args[0] === "symbol") event = args[0];
+	if (typeof args[1] === "boolean") once = args[1] ?? args[2];
+
+	function decorator(method, { kind, name, addInitializer }, one = once) {
 		if (kind !== "method") throw new Error("Can only apply event listeners to methods.");
 
 		if (!event) event = name;
@@ -164,9 +168,12 @@ export function on(event, once = false) {
 			});
 		}
 		else addInitializer(function() {
-			EventEmitter._attachListenerTo(this, event, method.bind(this), once);
+			EventEmitter._attachListenerTo(this, event, method.bind(this), one);
 		});
 	}
+
+	if (args.length === 0 || typeof args[0] === "string" || typeof args[0] === "symbol") return decorator;
+	else return decorator(...args);
 }
 
 EventEmitter.on = on;
@@ -180,8 +187,11 @@ EventEmitter.on = on;
  * @param {string} event - The event to listen for.
  * @returns {(method: (...args[]: any) => any, context: Object) => (...args[]: any) => any} A decorator function that registers the method as a one-time event listener.
  */
-export function once(event) {
-	return on(event, true);
+export function once(...args) {
+	if (args.length === 0) return on("", true);
+	if (typeof args[0] === "string" || typeof args[0] === "symbol")
+		return on(args[0], true);
+	return on(...args, true);
 }
 
 
@@ -235,8 +245,25 @@ export function once(event) {
  * @param {string|Symbol} mode - The mode in which to emit the event.
  * @returns {(method: (...args[]: any) => any, context: Object) => (...args[]: any) => any} A decorator function that emits the event before or after the method is called.
  */
-export function emit(event, mode = emit.all) {
-	return function (method, { kind, name }) {
+export function emit(...args) {
+	let event;
+	let mode = emit.all;
+
+	if (typeof args[0] === "string"
+		|| typeof args[0] === "symbol"
+		|| args[0] == Event
+		|| args[0] == CustomEvent
+		|| args[0] instanceof Event
+		|| args[0] instanceof CustomEvent
+		|| args[0]?.prototype instanceof Event
+		|| args[0]?.prototype instanceof CustomEvent
+	) event = args[0];
+	if (typeof args[1] === "string" || typeof args[1] === "symbol") mode = args[1];
+
+	//console.log({ event, mode });
+
+	function decorator(method, { kind, name }) {
+		//console.log({ method, kind, name, event, mode });
 		if (kind !== "method") throw new Error("Can only apply event emitters to methods.");
 
 		if (!event) event = name; // Use the method name as the event name if none is provided.
@@ -251,19 +278,20 @@ export function emit(event, mode = emit.all) {
 		// Events already created with `new Event()` or `new CustomEvent()` can't have any additional data passed to them.
 		// They can only be emitted as-is.
 		if (event instanceof Event || event instanceof CustomEvent) {
+			if (mode === emit.all) mode = emit.conditional;
 			switch (mode) {
 				case emit.none:
 				case emit.before: return function (...args) {
 					if (this.dispatchEvent) this.dispatchEvent(event);
 					else if (this.emit) this.emit(event.type, event);
-					else throw new Error("Object does not emit events.");
+					else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
 					return method.apply(this, args);
 				}
 				case emit.after: return function (...args) {
 					const result = method.apply(this, args);
 					if (this.dispatchEvent) this.dispatchEvent(event);
 					else if (this.emit) this.emit(event.type, event);
-					else throw new Error("Object does not emit events.");
+					else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
 					return result;
 				}
 				case emit.conditional: return function (...args) {
@@ -271,7 +299,7 @@ export function emit(event, mode = emit.all) {
 					if (result) {
 						if (this.dispatchEvent) this.dispatchEvent(event);
 						else if (this.emit) this.emit(event.type, event);
-						else throw new Error("Object does not emit events.");
+						else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
 					}
 					return result;
 				}
@@ -279,36 +307,6 @@ export function emit(event, mode = emit.all) {
 			}
 		}
 
-		// If the event is the Event constructor or a subclass of Event, create a new event instance,
-		// use the method name as the event name, and dispatch the event.
-		if (event === Event || event.prototype instanceof Event) {
-			switch (mode) {
-				case emit.none:
-				case emit.before: return function (...args) {
-					if (this.dispatchEvent) this.dispatchEvent(new event(name));
-					else if (this.emit) this.emit(name);
-					else throw new Error("Object does not emit events.");
-					return method.apply(this, args);
-				}
-				case emit.after: return function (...args) {
-					const result = method.apply(this, args);
-					if (this.dispatchEvent) this.dispatchEvent(new event(name));
-					else if (this.emit) this.emit(name);
-					else throw new Error("Object does not emit events.");
-					return result;
-				}
-				case emit.conditional: return function (...args) {
-					const result = method.apply(this, args);
-					if (result) {
-						if (this.dispatchEvent) this.dispatchEvent(new event(name));
-						else if (this.emit) this.emit(name);
-						else throw new Error("Object does not emit events.");
-					}
-					return result;
-				}
-				default: throw new Error("Invalid emit mode for Event class.");
-			}
-		}
 
 		// If the event is the CustomEvent constructor or a subclass of CustomEvent, create a new event instance,
 		// use the method name as the event name, and dispatch the event with the method's arguments and/or result as the detail.
@@ -317,35 +315,35 @@ export function emit(event, mode = emit.all) {
 				case emit.args: return function (...args) {
 					if (this.dispatchEvent) this.dispatchEvent(new event(name, { detail: args }));
 					else if (this.emit) this.emit(name, ...args);
-					else throw new Error("Object does not emit events.");
+					else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
 					return method.apply(this, args);
 				}
 				case emit.none:
 				case emit.before: return function (...args) {
 					if (this.dispatchEvent) this.dispatchEvent(new event(name));
 					else if (this.emit) this.emit(name);
-					else throw new Error("Object does not emit events.");
+					else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
 					return method.apply(this, args);
 				}
 				case emit.after: return function (...args) {
 					const result = method.apply(this, args);
 					if (this.dispatchEvent) this.dispatchEvent(new event(name, { detail: args }));
 					else if (this.emit) this.emit(name, ...args);
-					else throw new Error("Object does not emit events.");
+					else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
 					return result;
 				}
 				case emit.result: return function (...args) {
 					const result = method.apply(this, args);
 					if (this.dispatchEvent) this.dispatchEvent(new event(name, { detail: result }));
 					else if (this.emit) this.emit(name, result);
-					else throw new Error("Object does not emit events.");
+					else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
 					return result;
 				}
 				case emit.all: return function (...args) {
 					const result = method.apply(this, args);
 					if (this.dispatchEvent) this.dispatchEvent(new event(name, { detail: { args, result }}));
 					else if (this.emit) this.emit(name, result, ...args);
-					else throw new Error("Object does not emit events.");
+					else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
 					return result;
 				}
 				case emit.conditional: return function (...args) {
@@ -353,62 +351,118 @@ export function emit(event, mode = emit.all) {
 					if (result) {
 						if (this.dispatchEvent) this.dispatchEvent(new event(name, { detail: args }));
 						else if (this.emit) this.emit(name, ...args);
-						else throw new Error("Object does not emit events.");
+						else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
 					}
 					return result;
 				}
 				default: throw new Error("Invalid emit mode for CustomEvent class.");
 			}
 		}
+		
+		// If the event is the Event constructor or a subclass of Event, create a new event instance,
+		// use the method name as the event name, and dispatch the event.
+		if (event === Event || event.prototype instanceof Event) {
+			if (mode === emit.all) mode = emit.conditional;
+			switch (mode) {
+				case emit.none:
+				case emit.before: return function (...args) {
+					if (this.dispatchEvent) this.dispatchEvent(new event(name));
+					else if (this.emit) this.emit(name);
+					else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
+					return method.apply(this, args);
+				}
+				case emit.after: return function (...args) {
+					const result = method.apply(this, args);
+					if (this.dispatchEvent) this.dispatchEvent(new event(name));
+					else if (this.emit) this.emit(name);
+					else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
+					return result;
+				}
+				case emit.conditional: return function (...args) {
+					const result = method.apply(this, args);
+					if (result) {
+						if (this.dispatchEvent) this.dispatchEvent(new event(name));
+						else if (this.emit) this.emit(name);
+						else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
+					}
+					return result;
+				}
+				default: throw new Error("Invalid emit mode for Event class.");
+			}
+		}
 
 		// If the event is a string or symbol, use `emit()` to emit the event according to the mode.
 		switch (mode) {
 			case emit.args: return function (...args) {
-				EventEmitter.assertIsEmitter(this, name);
-				this.emit(event, ...args);
+				if (this.emit) this.emit(event, ...args);
+				else throw new Error("Object does not have an 'emit()' method.");
 				return method.apply(this, args);
 			}
 			case emit.none:
 			case emit.before: return function (...args) {
-				EventEmitter.assertIsEmitter(this, name);
-				this.emit(event);
+				if (this.emit) this.emit(event);
+				else throw new Error("Object does not have an 'emit()' method.");
 				return method.apply(this, args);
 			}
 			case emit.after: return function (...args) {
-				EventEmitter.assertIsEmitter(this, name);
 				const result = method.apply(this, args);
-				this.emit(event, ...args);
+				if (this.emit) this.emit(event, ...args);
+				else throw new Error("Object does not have an 'emit()' method.");
 				return result;
 			}
 			case emit.result: return function (...args) {
-				EventEmitter.assertIsEmitter(this, name);
 				const result = method.apply(this, args);
-				this.emit(event, result);
+				if (this.emit) this.emit(event, result);
+				else throw new Error("Object does not have an 'emit()' method.");
 				return result;
 			}
 			case emit.all: return function (...args) {
-				EventEmitter.assertIsEmitter(this, name);
 				const result = method.apply(this, args);
-				this.emit(event, result, ...args);
+				if (this.emit) this.emit(event, result, ...args);
+				else throw new Error("Object does not have an 'emit()' method.");
 				return result;
 			}
 			case emit.conditional: return function (...args) {
-				EventEmitter.assertIsEmitter(this, name);
 				const result = method.apply(this, args);
-				if (result) this.emit(event, ...args);
+				if (result) {
+					if (this.emit) this.emit(event, ...args);
+					else throw new Error("Object does not have an 'emit()' method.");
+				}
 				return result;
 			}
 			default: throw new Error("Invalid emit mode.");
 		}
 	}
+
+	if (args.length === 0 
+		|| typeof args[0] === "string"
+		|| typeof args[0] === "symbol"
+		|| args[0] === Event
+		|| args[0] === CustomEvent
+		|| args[0] instanceof Event
+		|| args[0] instanceof CustomEvent
+		|| args[0]?.prototype instanceof Event
+		|| args[0]?.prototype instanceof CustomEvent
+	) return decorator;
+	else return decorator(...args);
 }
 
 
-export function emits(event, mode = emits.both) {
-	return function (accessor, { kind, name }) {
+export function emits(...args) {
+	let event;
+	let mode = emits.both;
+
+	if (typeof args[0] === "string" 
+		|| typeof args[0] === "symbol"
+		|| args[0] instanceof Event
+		|| args[0] instanceof CustomEvent
+	) event = args[0];
+	if (typeof args[1] === "string" || typeof args[1] === "symbol") mode = args[1];
+
+	function decorator(accessor, { kind, name }={}) {
 		if (!["accessor", "getter", "setter"].includes(kind)) throw new Error("Can only apply emits to accessors.");
 
-		let customName = name;
+		let customName = typeof	event === "string" ? event : "";
 
 		if (!event) {
 			event = name; // Use the method name as the event name if none is provided.
@@ -424,34 +478,34 @@ export function emits(event, mode = emits.both) {
 
 		const access = {};
 
-		if (kind === "getter" || kind === "accessor" && mode === emits.both || mode === emits.get || mode === emits.all) {
-			access.get =  function () {
+		if ((kind === "getter" || kind === "accessor") && (mode === emits.both || mode === emits.get || mode === emits.all)) {
+			access.get = function () {
 				const got = accessor.get ? accessor.get.call(this) : accessor.call(this);
 
 				if (event instanceof Event || event instanceof CustomEvent) {
 					if (this.dispatchEvent) this.dispatchEvent(event);
 					else if (this.emit) this.emit(event.type, event);
-					else throw new Error("Object does not emit events.");
+					else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
 				}
 				else {
-					EventEmitter.assertIsEmitter(this);
-					this.emit(customName || `get:${event}`, got);
+					if (this.emit) this.emit(customName || `get:${event}`, got);
+					else throw new Error("Object does not have an 'emit()' method.");
 				}
 
 				return got;
 			}
 		}
 
-		if (kind === "setter" || kind === "accessor" && mode === emits.both || mode === emits.set || mode === emits.all) {
+		if ((kind === "setter" || kind === "accessor") && (mode === emits.both || mode === emits.set || mode === emits.all)) {
 			access.set = function (value) {
 				if (event instanceof Event || event instanceof CustomEvent) {
 					if (this.dispatchEvent) this.dispatchEvent(event);
 					else if (this.emit) this.emit(event.type, event);
-					else throw new Error("Object does not emit events.");
+					else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
 				}
 				else {
-					EventEmitter.assertIsEmitter(this);
-					this.emit(customName || `set:${event}`, value);
+					if (this.emit) this.emit(customName || `set:${event}`, value);
+					else throw new Error("Object does not have an 'emit()' method.");
 				}
 
 				if (accessor.set) return accessor.set.call(this, value);
@@ -459,16 +513,16 @@ export function emits(event, mode = emits.both) {
 			}
 		}
 
-		if (kind === "accessor") {
+		if (kind === "accessor" && (mode === emits.init || mode === emits.all)) {
 			access.init = function (initial) {
 				if (event instanceof Event || event instanceof CustomEvent) {
 					if (this.dispatchEvent) this.dispatchEvent(event);
 					else if (this.emit) this.emit(event.type, event);
-					else throw new Error("Object does not emit events.");
+					else throw new Error("Object does not have an 'emit()' or `dispatchEvent()` method.");
 				}
 				else {
-					EventEmitter.assertIsEmitter(this);
-					this.emit(customName || `init:${event}`, initial);
+					if (this.emit) this.emit(customName || `init:${event}`, initial);
+					else throw new Error("Object does not have an 'emit()' method.");
 				}
 
 				return initial;
@@ -476,8 +530,17 @@ export function emits(event, mode = emits.both) {
 		}
 
 		if (kind === "accessor") return access;
-		else return access[kind];
+		if (kind === "getter") return access.get;
+		if (kind === "setter") return access.set;
 	}
+
+	if (args.length === 0 
+		|| typeof args[0] === "string"
+		|| typeof args[0] === "symbol"
+		|| args[0] instanceof Event
+		|| args[0] instanceof CustomEvent
+	) return decorator;
+	else return decorator(...args);
 }
 
 
