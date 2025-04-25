@@ -1,6 +1,7 @@
 import { suite, test } from "node:test";
 import assert from "node:assert";
 import { EventEmitter, emitter, on, once, emit, emits } from "./decorators.js";
+import { logged } from "./helpers.js";
 
 // Test suite for EventEmitter class and decorators
 
@@ -544,7 +545,7 @@ suite("@emit decorator", () => {
 			assert(emitted, "Event was not emitted");
 		});
 
-		await t.test("@emit's behaviour should depend on the mode", async (t) => {
+		await t.test("@emit's behavior should depend on the mode", async (t) => {
 			await t.test("with mode before, the event should be emitted before the method is called", async (t) => {
 				let testValue = 0;
 				let emitted = false;
@@ -1185,3 +1186,115 @@ suite("@emits decorator", () => {
 		}, "@emits applied to a non-accessor target");
 	});
 });
+
+suite("@logged", () => {
+	test("should log class construction", () => {
+		const logs = [];
+		console.info = (message, ...args) => logs.push({ message, args });
+
+		@logged("info")
+		class TestClass {
+			constructor(arg) {
+				this.arg = arg;
+			}
+		}
+
+		const instance = new TestClass(42);
+		assert.strictEqual(instance.arg, 42);
+		assert.strictEqual(logs.length, 1);
+		assert.strictEqual(logs[0].message, "Constructed new TestClass with args:");
+		assert.deepStrictEqual(logs[0].args, [[42]]);
+	});
+
+	test("should log method calls", () => {
+		const logs = [];
+		console.info = (message, ...args) => logs.push({ message, args });
+
+		class TestClass {
+			@logged("info")
+			method(arg) {
+				return arg * 2;
+			}
+		}
+
+		const instance = new TestClass();
+		const result = instance.method(21);
+		assert.strictEqual(result, 42);
+		assert.strictEqual(logs.length, 1);
+		assert.strictEqual(logs[0].message, "Calling method 'method' with args:");
+		assert.deepStrictEqual(logs[0].args, [[21], "and returned:", 42]);
+	});
+
+	test("should log getter and setter", () => {
+		const logs = [];
+		console.info = (message, ...args) => logs.push({ message, args });
+
+		class TestClass {
+			_value = 0;
+
+			@logged("info")
+			get value() {
+				return this._value;
+			}
+
+			@logged("info")
+			set value(val) {
+				this._value = val;
+			}
+		}
+
+		const instance = new TestClass();
+		instance.value = 42;
+		const result = instance.value;
+		assert.strictEqual(result, 42);
+		assert.strictEqual(logs.length, 2);
+		assert.strictEqual(logs[0].message, "Setting setter 'value' to value:");
+		assert.deepStrictEqual(logs[0].args, [42]);
+		assert.strictEqual(logs[1].message, "Getting getter 'value' got value:");
+		assert.deepStrictEqual(logs[1].args, [42]);
+	});
+
+	test("should log field initialization", () => {
+		const logs = [];
+		console.info = (message, ...args) => logs.push({ message, args });
+
+		class TestClass {
+			@logged("info")
+			field = 42;
+		}
+
+		const instance = new TestClass();
+		assert.strictEqual(instance.field, 42);
+		assert.strictEqual(logs.length, 1);
+		assert.strictEqual(logs[0].message, "Field field created with initial value:");
+		assert.deepStrictEqual(logs[0].args, [42]);
+	});
+
+	test("should log accessors", () => {
+		const logs = [];
+		console.info = (message, ...args) => logs.push({ message, args });
+
+		class TestClass {
+			_value = 0;
+
+			@logged("info")
+			accessor value = 42;
+		}
+
+		const instance = new TestClass();
+
+		assert.strictEqual(logs.length, 1);
+		assert.strictEqual(logs[0].message, "Accessor 'value' created with initial value:");
+		assert.strictEqual(instance.value, 42);
+		assert.strictEqual(logs.length, 2);
+		assert.strictEqual(logs[1].message, "Getting accessor 'value' got value:");
+		assert.deepStrictEqual(logs[0].args, [42]);
+		
+		instance.value = 21;
+
+		assert.strictEqual(logs.length, 3);
+		assert.strictEqual(logs[2].message, "Setting accessor 'value' to value:");
+		assert.deepStrictEqual(logs[2].args, [21]);
+	});
+});
+

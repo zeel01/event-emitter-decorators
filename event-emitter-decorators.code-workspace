@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"nodejs-testing.include": [
+			"./dist/"
+		],
+		"nodejs-testing.pretest": [
+			"node",
+			"./node_modules/@babel/cli/bin/babel.js",
+			"src",
+			"--out-dir",
+			"dist",
+			"--source-maps"
+		]
+	}
+}

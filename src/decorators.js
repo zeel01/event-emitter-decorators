@@ -448,6 +448,13 @@ export function emit(...args) {
 }
 
 
+/**
+ * A decorator that emits an event before or after a property is accessed.
+ * The event can be a string, symbol, Event, CustomEvent, or the Event or CustomEvent constructors.
+ *
+ * @arg {string|Symbol|Event|CustomEvent|typeof Event|typeof CustomEvent} event - The event to emit. If a symbol is provided, it is used as the mode.
+ * @arg {string|Symbol} mode - The mode in which to emit the event.	
+ */
 export function emits(...args) {
 	let event;
 	let mode = emits.both;
